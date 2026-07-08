@@ -4,16 +4,17 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import toast from "react-hot-toast";
-import { ArrowLeft, Phone } from "lucide-react";
+import { ArrowLeft, GraduationCap, Phone, RotateCcw } from "lucide-react";
 
 import { AdminShell } from "@/components/admin-shell/admin-shell";
 import { ConfirmModal } from "@/components/admin-shell/modal";
 import { SpotoButton } from "@/design-system/components/button";
 import { SpotoCard } from "@/design-system/components/card";
-import { SpotoInput, SpotoTextarea } from "@/design-system/components/input";
+import { SpotoTextarea } from "@/design-system/components/input";
 import { StatusBadge, statusLabel } from "@/design-system/components/status-badge";
-import { changeStatus, getSubmission, publishSubmission, type SubmissionDetail } from "@/lib/api/admin";
+import { changeStatus, getSubmission, resetDemo, sendReward, type SubmissionDetail } from "@/lib/api/admin";
 import { ApiError } from "@/lib/api/client";
+import { cn } from "@/lib/utils";
 import { formatDate, formatInr } from "@/lib/format";
 
 const BHK_LABELS: Record<string, string> = {
@@ -24,7 +25,7 @@ const BHK_LABELS: Record<string, string> = {
   "4_bhk_plus": "4 BHK+",
 };
 
-type ActionKind = "verify" | "need_more_information" | "duplicate" | "rejected" | "publish";
+type ActionKind = "verify" | "reward" | "need_more_information" | "duplicate" | "rejected" | "reset";
 
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
@@ -35,13 +36,42 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+function StepRow({
+  n,
+  label,
+  done,
+  children,
+}: {
+  n: number;
+  label: string;
+  done: boolean;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-spoto border border-spoto-line p-3">
+      <div className="mb-2 flex items-center gap-2">
+        <span
+          className={cn(
+            "grid h-6 w-6 place-items-center rounded-full text-xs font-heading font-bold",
+            done ? "bg-spoto-green text-[#101010]" : "bg-spoto-purple/20 text-spoto-purple",
+          )}
+        >
+          {done ? "✓" : n}
+        </span>
+        <span className="font-heading text-sm font-semibold text-spoto-ink">{label}</span>
+        {done && <span className="ml-auto text-xs font-heading font-semibold text-spoto-green">Done</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
 function SubmissionDetailContent() {
   const params = useParams<{ id: string }>();
   const [sub, setSub] = useState<SubmissionDetail | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [action, setAction] = useState<ActionKind | null>(null);
   const [reason, setReason] = useState("");
-  const [reward, setReward] = useState("100");
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
@@ -50,7 +80,6 @@ function SubmissionDetailContent() {
       .then((data) => {
         setSub(data);
         setState("ready");
-        setReward(String(data.reward || 100));
       })
       .catch(() => setState("error"));
   }, [params?.id]);
@@ -59,19 +88,22 @@ function SubmissionDetailContent() {
     load();
   }, [load]);
 
-  async function runAction() {
-    if (!sub || !action) return;
+  async function perform(kind: ActionKind) {
+    if (!sub) return;
     setBusy(true);
     try {
-      if (action === "publish") {
-        await publishSubmission(sub.id);
-        toast.success("Published live — reward credited to ranger");
-      } else if (action === "verify") {
-        await changeStatus(sub.id, { status: "verified", reason, reward_amount: Number(reward) || 0 });
-        toast.success("Submission verified");
+      if (kind === "reward") {
+        await sendReward(sub.id);
+        toast.success("₹100 reward sent to the ranger");
+      } else if (kind === "verify") {
+        await changeStatus(sub.id, { status: "verified" });
+        toast.success("Submission verified — reward unlocked");
+      } else if (kind === "reset") {
+        await resetDemo();
+        toast.success("Demo reset");
       } else {
-        await changeStatus(sub.id, { status: action, reason });
-        toast.success(`Marked ${statusLabel(action)}`);
+        await changeStatus(sub.id, { status: kind, reason });
+        toast.success(`Marked ${statusLabel(kind)}`);
       }
       setAction(null);
       setReason("");
@@ -86,8 +118,12 @@ function SubmissionDetailContent() {
   if (state === "loading") return <SpotoCard className="text-center text-sm text-spoto-muted">Loading…</SpotoCard>;
   if (state === "error" || !sub) return <SpotoCard className="text-center text-sm text-spoto-muted">Submission not found.</SpotoCard>;
 
-  const isTerminal = ["reward_credited", "rejected", "duplicate"].includes(sub.status);
-  const canPublish = sub.status === "verified" || sub.status === "listed_on_spoto";
+  const verifyDone = ["verified", "listed_on_spoto", "reward_credited"].includes(sub.status);
+  const rewardEnabled = sub.status === "verified" || sub.status === "listed_on_spoto";
+  const isRewarded = sub.status === "reward_credited";
+  const isTerminalNegative = ["rejected", "duplicate"].includes(sub.status);
+  const canVerify = ["submitted", "under_review", "need_more_information"].includes(sub.status);
+  const isDemo = sub.buildingName.startsWith("Demo Listing");
 
   return (
     <>
@@ -105,6 +141,26 @@ function SubmissionDetailContent() {
           <StatusBadge status={sub.status} />
         </div>
       </header>
+
+      {isDemo && (
+        <SpotoCard className="mb-4 border-spoto-purple/40 bg-spoto-purple/10">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <GraduationCap className="mt-0.5 h-5 w-5 shrink-0 text-spoto-purple" />
+              <div>
+                <p className="font-heading text-sm font-bold text-spoto-ink">Practice the review flow</p>
+                <p className="mt-1 text-sm text-spoto-muted">
+                  1) Click <span className="font-semibold text-spoto-ink">Verify</span> — the reward button unlocks. 2) Click{" "}
+                  <span className="font-semibold text-spoto-green">Send Reward ₹100</span> to credit the ranger. Reset anytime to try again.
+                </p>
+              </div>
+            </div>
+            <SpotoButton variant="secondary" onClick={() => setAction("reset")} icon={<RotateCcw className="h-4 w-4" />}>
+              Reset demo
+            </SpotoButton>
+          </div>
+        </SpotoCard>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-3">
         {/* Details */}
@@ -146,60 +202,68 @@ function SubmissionDetailContent() {
           </ol>
         </SpotoCard>
 
-        {/* Actions */}
+        {/* Two-step actions */}
         <SpotoCard className="lg:col-span-1">
           <h2 className="mb-3 font-heading text-base font-bold text-spoto-ink">Review actions</h2>
-          {isTerminal ? (
+
+          {isTerminalNegative ? (
             <p className="text-sm text-spoto-muted">This submission is finalized ({statusLabel(sub.status)}). No further action.</p>
           ) : (
             <div className="grid gap-3">
-              {canPublish && (
-                <SpotoButton variant="cta" onClick={() => setAction("publish")}>
-                  Publish &amp; Reward
-                </SpotoButton>
+              <StepRow n={1} label="Verify submission" done={verifyDone}>
+                {canVerify && (
+                  <SpotoButton className="w-full" onClick={() => perform("verify")} disabled={busy}>
+                    Verify (success)
+                  </SpotoButton>
+                )}
+              </StepRow>
+
+              <StepRow n={2} label="Send reward" done={isRewarded}>
+                {!isRewarded && (
+                  <>
+                    <SpotoButton className="w-full" variant="cta" disabled={!rewardEnabled || busy} onClick={() => setAction("reward")}>
+                      Send Reward (₹100)
+                    </SpotoButton>
+                    {!rewardEnabled && (
+                      <p className="mt-2 text-xs text-spoto-muted">Verify the submission first to unlock the reward.</p>
+                    )}
+                  </>
+                )}
+              </StepRow>
+
+              {!isRewarded && (
+                <div className="mt-1 grid gap-2 border-t border-spoto-line pt-3">
+                  <p className="text-xs text-spoto-muted">Other outcomes</p>
+                  <SpotoButton variant="secondary" onClick={() => setAction("need_more_information")}>Request more info</SpotoButton>
+                  <SpotoButton variant="secondary" onClick={() => setAction("duplicate")}>Mark duplicate</SpotoButton>
+                  <SpotoButton variant="outline" onClick={() => setAction("rejected")}>Reject (failed)</SpotoButton>
+                </div>
               )}
-              {!canPublish && (
-                <SpotoButton onClick={() => setAction("verify")}>Verify (success)</SpotoButton>
-              )}
-              <SpotoButton variant="secondary" onClick={() => setAction("need_more_information")}>
-                Request more info
-              </SpotoButton>
-              <SpotoButton variant="secondary" onClick={() => setAction("duplicate")}>
-                Mark duplicate
-              </SpotoButton>
-              <SpotoButton variant="outline" onClick={() => setAction("rejected")}>
-                Reject (failed)
-              </SpotoButton>
             </div>
           )}
         </SpotoCard>
       </div>
 
-      {/* Confirmation modals */}
+      {/* Modals */}
       <ConfirmModal
-        open={action === "publish"}
-        title="Publish live on Spoto?"
-        description={`This lists ${sub.buildingName} live and credits ₹${sub.reward || 100} to ${sub.rangerName}'s wallet.`}
-        confirmLabel="Publish & Reward"
+        open={action === "reward"}
+        title="Send ₹100 reward?"
+        description={`This lists ${sub.buildingName} live on Spoto and credits ₹100 to ${sub.rangerName}'s wallet.`}
+        confirmLabel="Send Reward ₹100"
         confirmVariant="cta"
         loading={busy}
-        onConfirm={runAction}
+        onConfirm={() => perform("reward")}
         onCancel={() => setAction(null)}
       />
       <ConfirmModal
-        open={action === "verify"}
-        title="Verify submission"
-        description="Approve this lead and set the reward amount."
-        confirmLabel="Verify"
+        open={action === "reset"}
+        title="Reset the demo listing?"
+        description="Returns the demo to 'submitted' and undoes its practice reward so you can run the flow again."
+        confirmLabel="Reset demo"
         loading={busy}
-        onConfirm={runAction}
+        onConfirm={() => perform("reset")}
         onCancel={() => setAction(null)}
-      >
-        <label className="grid gap-2">
-          <span className="text-sm font-heading font-semibold text-spoto-ink">Reward amount (₹)</span>
-          <SpotoInput inputMode="numeric" value={reward} onChange={(e) => setReward(e.target.value.replace(/\D/g, ""))} />
-        </label>
-      </ConfirmModal>
+      />
       <ConfirmModal
         open={action === "need_more_information" || action === "duplicate" || action === "rejected"}
         title={action ? `Mark ${statusLabel(action)}` : ""}
@@ -207,7 +271,7 @@ function SubmissionDetailContent() {
         confirmLabel="Confirm"
         confirmVariant="outline"
         loading={busy}
-        onConfirm={runAction}
+        onConfirm={() => action && perform(action)}
         onCancel={() => setAction(null)}
       >
         <SpotoTextarea placeholder="Reason / note" value={reason} onChange={(e) => setReason(e.target.value)} />

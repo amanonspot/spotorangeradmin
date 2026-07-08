@@ -109,14 +109,25 @@ export function getSubmission(id: string): Promise<SubmissionDetail> {
 
 export function changeStatus(
   id: string,
-  body: { status: string; reason?: string; suggestion?: string; reward_amount?: number },
+  body: { status: string; reason?: string; suggestion?: string },
 ): Promise<SubmissionDetail> {
   return apiClient(`/admin/submissions/${id}/status`, { method: "POST", body: JSON.stringify(body) });
 }
 
-export function publishSubmission(id: string): Promise<SubmissionDetail> {
-  return apiClient(`/admin/submissions/${id}/publish`, { method: "POST" });
+/** Reward step — enabled only after a submission is verified. Credits a flat ₹100. */
+export function sendReward(id: string): Promise<SubmissionDetail> {
+  return apiClient(`/admin/submissions/${id}/reward`, { method: "POST" });
 }
+
+export function getDemo(): Promise<{ id: string; buildingName: string; status: string }> {
+  return apiClient("/admin/demo");
+}
+
+export function resetDemo(): Promise<{ status: string; id: string }> {
+  return apiClient("/admin/demo/reset", { method: "POST" });
+}
+
+export const DEMO_LISTING_NAME = "Demo Listing — Practice";
 
 export function listRangers(): Promise<RangerRow[]> {
   return apiClient("/admin/rangers");
